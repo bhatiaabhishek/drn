@@ -25,6 +25,8 @@ from torch.autograd import Variable
 
 import drn
 import data_transforms as transforms
+from tensorboardX import SummaryWriter
+writer = SummaryWriter('runs/exp-1')
 
 try:
     from modules import batchnormsync
@@ -282,7 +284,6 @@ def train(train_loader, model, criterion, optimizer, epoch,
 
     # switch to train mode
     model.train()
-
     end = time.time()
 
     for i, (input, target) in enumerate(train_loader):
@@ -312,7 +313,8 @@ def train(train_loader, model, criterion, optimizer, epoch,
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
+        writer.add_scalar('train_loss', loss, epoch)
+        writer.add_graph(model, input_var)
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()

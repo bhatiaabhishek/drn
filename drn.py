@@ -3,9 +3,10 @@ import pdb
 import torch.nn as nn
 import math
 import torch.utils.model_zoo as model_zoo
+from tensorboardX import SummaryWriter
 
 BatchNorm = nn.BatchNorm2d
-
+writer = SummaryWriter('runs/exp-1')
 
 # __all__ = ['DRN', 'drn26', 'drn42', 'drn58']
 
