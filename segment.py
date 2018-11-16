@@ -22,11 +22,10 @@ import torch.backends.cudnn as cudnn
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.autograd import Variable
+from tensorboardX import SummaryWriter
 
 import drn
 import data_transforms as transforms
-from tensorboardX import SummaryWriter
-writer = SummaryWriter('runs/exp-1')
 
 try:
     from modules import batchnormsync
@@ -35,10 +34,9 @@ except ImportError:
 
 FORMAT = "[%(asctime)-15s %(filename)s:%(lineno)d %(funcName)s] %(message)s"
 logging.basicConfig(format=FORMAT)
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-
-
+logger = logging.getLogger('tensorflow')
+logger.setLevel(logging.INFO)
+writer = SummaryWriter('runs/exp-1')
 CITYSCAPE_PALETTE = np.asarray([
     [128, 64, 128],
     [244, 35, 232],
