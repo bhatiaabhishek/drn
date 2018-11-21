@@ -22,7 +22,6 @@ import torch.backends.cudnn as cudnn
 import torch.optim as optim
 from torchvision import datasets, transforms
 from torch.autograd import Variable
-from tensorboardX import SummaryWriter
 
 import drn
 import data_transforms as transforms
@@ -34,9 +33,10 @@ except ImportError:
 
 FORMAT = "[%(asctime)-15s %(filename)s:%(lineno)d %(funcName)s] %(message)s"
 logging.basicConfig(format=FORMAT)
-logger = logging.getLogger('tensorflow')
-logger.setLevel(logging.INFO)
-writer = SummaryWriter('runs/exp-1')
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
+
 CITYSCAPE_PALETTE = np.asarray([
     [128, 64, 128],
     [244, 35, 232],
@@ -89,9 +89,13 @@ class DRNSeg(nn.Module):
             pmodel.load_state_dict(pretrained_model)
         self.base = nn.Sequential(*list(model.children())[:-2])
 
-        self.seg = nn.Conv2d(model.out_dim, classes,
+        self.aspp = drn.aspp([[512,512,1],
+                              [512,512,6],
+                              [512,512,12],
+                              [512,512,18]])
+        self.seg = nn.Conv2d(512, classes,
                              kernel_size=1, bias=True)
-        self.softmax = nn.LogSoftmax()
+        self.softmax = nn.LogSoftmax(dim=1)
         m = self.seg
         n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
         m.weight.data.normal_(0, math.sqrt(2. / n))
@@ -102,12 +106,13 @@ class DRNSeg(nn.Module):
             up = nn.ConvTranspose2d(classes, classes, 16, stride=8, padding=4,
                                     output_padding=0, groups=classes,
                                     bias=False)
-            fill_up_weights(up)
-            up.weight.requires_grad = False
+            #fill_up_weights(up)
+            #up.weight.requires_grad = False
             self.up = up
 
     def forward(self, x):
         x = self.base(x)
+        x = self.aspp(x)
         x = self.seg(x)
         y = self.up(x)
         return self.softmax(y), x
@@ -115,9 +120,13 @@ class DRNSeg(nn.Module):
     def optim_parameters(self, memo=None):
         for param in self.base.parameters():
             yield param
+        for param in self.aspp.parameters():
+            yield param
         for param in self.seg.parameters():
             yield param
 
+        for param in self.up.parameters():
+            yield param
 
 class SegList(torch.utils.data.Dataset):
     def __init__(self, data_dir, phase, transforms, list_dir=None,
@@ -211,7 +220,7 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10):
                                torch.nn.modules.loss.MSELoss]:
             target = target.float()
         input = input.cuda()
-        target = target.cuda(non_blocking=True)
+        target = target.cuda(async=True)
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
 
@@ -282,6 +291,7 @@ def train(train_loader, model, criterion, optimizer, epoch,
 
     # switch to train mode
     model.train()
+
     end = time.time()
 
     for i, (input, target) in enumerate(train_loader):
@@ -293,7 +303,7 @@ def train(train_loader, model, criterion, optimizer, epoch,
             target = target.float()
 
         input = input.cuda()
-        target = target.cuda(non_blocking=True)
+        target = target.cuda(async=True)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
@@ -311,8 +321,7 @@ def train(train_loader, model, criterion, optimizer, epoch,
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        writer.add_scalar('train_loss', loss, epoch)
-        writer.add_graph(model, input_var)
+
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
