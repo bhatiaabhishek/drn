@@ -74,12 +74,12 @@ class aspp(nn.Module):
         #                                     nn.BatchNorm2d(512),
         #                                     nn.ReLU(inplace=True))
         self.global_avg_pool = nn.Sequential(nn.AdaptiveAvgPool2d((1, 1)),
-                                             SeparableConv2d(con[0],512 , 1, stride=1, bias=False),
-                                             nn.BatchNorm2d(512)
+                                             SeparableConv2d(con[0],con[1] , 1, stride=1, bias=False),
+                                             nn.BatchNorm2d(con[1])
                                             )
 
-        self.conv_out = SeparableConv2d(2560,512,1,stride=1,bias=False)
-        self.bn_out = nn.BatchNorm2d(512)
+        self.conv_out = SeparableConv2d(5*con[1],con[1],1,stride=1,bias=False)
+        self.bn_out = nn.BatchNorm2d(con[1])
         self.relu_out = nn.ReLU(inplace=True)
         self._init_weight()
     
@@ -94,10 +94,12 @@ class aspp(nn.Module):
             #print (module)
             x1 = module(x)
             x1 = self.relu_out(x1+residual)
+            #x1 = self.relu_out(x1)
             x_out.append(x1)
         gap = self.global_avg_pool(x)
         gap = self.relu_out(gap+residual)
-        avgpool = F.upsample(gap, size=x_out[-1].size()[2:], mode='bilinear')
+        #gap = self.relu_out(gap)
+        avgpool = F.interpolate(gap, size=x_out[-1].size()[2:], mode='bilinear',align_corners=True)
         x_out.append(avgpool)
         x = torch.cat(tuple(x_out),dim=1)                          
         x = self.conv_out(x)
@@ -310,6 +312,7 @@ class DRN(nn.Module):
 
         x = self.layer3(x)
         y.append(x)
+        low_level = x
 
         x = self.layer4(x)
         y.append(x)
@@ -329,17 +332,17 @@ class DRN(nn.Module):
             x = self.layer8(x)
             y.append(x)
 
-        if self.out_map:
-            x = self.fc(x)
-        else:
-            x = self.avgpool(x)
-            x = self.fc(x)
-            x = x.view(x.size(0), -1)
+        #if self.out_map:
+        #    x = self.fc(x)
+        #else:
+        #    x = self.avgpool(x)
+        #    x = self.fc(x)
+        #    x = x.view(x.size(0), -1)
 
         if self.out_middle:
             return x, y
         else:
-            return x
+            return x, low_level
 
 
 class DRN_A(nn.Module):
@@ -381,7 +384,7 @@ class DRN_A(nn.Module):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
-               nn.Conv2d(self.inplanes, planes * block.expansion,
+               nn.SeparableConv2d(self.inplanes, planes * block.expansion,
                           kernel_size=1, stride=stride, bias=False),
                 nn.BatchNorm2d(planes * block.expansion),
             )
@@ -402,15 +405,16 @@ class DRN_A(nn.Module):
         x = self.maxpool(x)
 
         x = self.layer1(x)
+        low_level = x
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
 
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-        x = self.fc(x)
+        #x = self.avgpool(x)
+        #x = x.view(x.size(0), -1)
+        #x = self.fc(x)
 
-        return x
+        return x, low_level
 
 
 def drn_a_50(pretrained=False, **kwargs):

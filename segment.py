@@ -25,7 +25,7 @@ from torch.autograd import Variable
 
 import drn
 import data_transforms as transforms
-
+import torch.nn.functional as F
 try:
     from modules import batchnormsync
 except ImportError:
@@ -87,8 +87,8 @@ class DRNSeg(nn.Module):
         pmodel = nn.DataParallel(model)
         if pretrained_model is not None:
             pmodel.load_state_dict(pretrained_model)
-        self.base = nn.Sequential(*list(model.children())[:-2])
-
+        self.base = model #nn.Sequential(*list(model.children())[:-2])
+        print(model)
         self.aspp = drn.aspp([[512,512,1],
                               [512,512,6],
                               [512,512,12],
@@ -100,21 +100,59 @@ class DRNSeg(nn.Module):
         n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
         m.weight.data.normal_(0, math.sqrt(2. / n))
         m.bias.data.zero_()
+        ## [1x1, 32] for channel reduction.
+        #self.conv2 = nn.Conv2d(64, 32, 1, bias=False)
+        #self.bn2 = nn.BatchNorm2d(32)
+        #self.relu2 = nn.ReLU()
+
+        self.last_conv = nn.Sequential(
+                                       nn.Conv2d(576, 512, kernel_size=3, stride=1, padding=1, bias=False),
+                                       nn.BatchNorm2d(512),
+                                       nn.ReLU())
+        for m in self.last_conv.modules():
+            if isinstance(m,nn.Conv2d):
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0,math.sqrt(2. / n))
+            elif isinstance(m,nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
         if use_torch_up:
             self.up = nn.UpsamplingBilinear2d(scale_factor=8)
         else:
-            up = nn.ConvTranspose2d(classes, classes, 16, stride=8, padding=4,
+            up = nn.ConvTranspose2d(classes, classes, 8, stride=4, padding=2,
                                     output_padding=0, groups=classes,
                                     bias=False)
             #fill_up_weights(up)
             #up.weight.requires_grad = False
             self.up = up
-
+        self.up_4 = nn.ConvTranspose2d(512, 512, 8, stride=2, padding=3,
+                                    output_padding=0, groups=classes,
+                                    bias=False)
+        m = self.up
+        n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+        m.weight.data.normal_(0, math.sqrt(2. / n))
+        m = self.up_4
+        n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+        m.weight.data.normal_(0, math.sqrt(2. / n))
     def forward(self, x):
-        x = self.base(x)
-        x = self.aspp(x)
+        x_input = x
+        base_x, low_level_feat  = self.base(x)
+        x = self.aspp(base_x)
+        #print(x.size())
+        #print(low_level_feat.size())
+        #x = F.interpolate(x, size=(int(math.ceil(x_input.size()[-2]/4)),
+        #                                    int(math.ceil(x_input.size()[-1]/4))), mode='bilinear', align_corners=True)
+        x = self.up_4(x) 
+           
+        #llf = self.conv2(low_level_feat)
+        #llf = self.bn2(llf)
+        #llf = self.relu2(llf)
+        x = torch.cat((x,low_level_feat),dim=1)
+        x = self.last_conv(x)
         x = self.seg(x)
         y = self.up(x)
+        #y = F.interpolate(x, size=x_input.size()[2:], mode='bilinear', align_corners=True)
+
         return self.softmax(y), x
 
     def optim_parameters(self, memo=None):
@@ -124,7 +162,8 @@ class DRNSeg(nn.Module):
             yield param
         for param in self.seg.parameters():
             yield param
-
+        for param in self.last_conv.parameters():
+            yield param
         for param in self.up.parameters():
             yield param
 
@@ -220,7 +259,7 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10):
                                torch.nn.modules.loss.MSELoss]:
             target = target.float()
         input = input.cuda()
-        target = target.cuda(async=True)
+        target = target.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input, volatile=True)
         target_var = torch.autograd.Variable(target, volatile=True)
 
@@ -230,7 +269,7 @@ def validate(val_loader, model, criterion, eval_score=None, print_freq=10):
 
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
+        losses.update(loss.item(), input.size(0))
         if eval_score is not None:
             score.update(eval_score(output, target_var), input.size(0))
 
@@ -279,7 +318,7 @@ def accuracy(output, target):
     correct = correct[target != 255]
     correct = correct.view(-1)
     score = correct.float().sum(0).mul(100.0 / correct.size(0))
-    return score.data[0]
+    return score.item()
 
 
 def train(train_loader, model, criterion, optimizer, epoch,
@@ -303,7 +342,7 @@ def train(train_loader, model, criterion, optimizer, epoch,
             target = target.float()
 
         input = input.cuda()
-        target = target.cuda(async=True)
+        target = target.cuda(non_blocking=True)
         input_var = torch.autograd.Variable(input)
         target_var = torch.autograd.Variable(target)
 
@@ -313,7 +352,7 @@ def train(train_loader, model, criterion, optimizer, epoch,
 
         # measure accuracy and record loss
         # prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
+        losses.update(loss.item(), input.size(0))
         if eval_score is not None:
             scores.update(eval_score(output, target_var), input.size(0))
 
@@ -629,6 +668,7 @@ def test_seg(args):
 
     single_model = DRNSeg(args.arch, args.classes, pretrained_model=None,
                           pretrained=False)
+    print(single_model)
     if args.pretrained:
         single_model.load_state_dict(torch.load(args.pretrained))
     model = torch.nn.DataParallel(single_model).cuda()
