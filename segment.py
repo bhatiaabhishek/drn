@@ -88,7 +88,6 @@ class DRNSeg(nn.Module):
         if pretrained_model is not None:
             pmodel.load_state_dict(pretrained_model)
         self.base = model #nn.Sequential(*list(model.children())[:-2])
-        print(model)
         self.aspp = drn.aspp([[512,512,1],
                               [512,512,6],
                               [512,512,12],
