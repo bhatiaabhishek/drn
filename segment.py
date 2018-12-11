@@ -667,7 +667,6 @@ def test_seg(args):
 
     single_model = DRNSeg(args.arch, args.classes, pretrained_model=None,
                           pretrained=False)
-    print(single_model)
     if args.pretrained:
         single_model.load_state_dict(torch.load(args.pretrained))
     model = torch.nn.DataParallel(single_model).cuda()
